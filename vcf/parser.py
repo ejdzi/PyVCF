@@ -6,6 +6,14 @@ import itertools
 import os
 import re
 import sys
+import pybedtools
+from pybedtools import featurefuncs as f
+
+def lf_filter(feature,location,featuretype): ###dodana funkcja!
+	if ((int(feature[3]) >= location[0] and int(feature[4]) <= location[1]) and feature[2] == featuretype):
+		return True
+	return False
+
 
 try:
     from collections import OrderedDict
@@ -231,6 +239,7 @@ class _vcf_metadata_parser(object):
         return match.group('key'), match.group('val')
 
 
+
 class Reader(object):
     """ Reader for a VCF v 4.0 file, an iterator returning ``_Record objects`` """
 
@@ -300,6 +309,7 @@ class Reader(object):
         self._parse_metainfo()
         self._format_cache = {}
         self.encoding = encoding
+	self._bedtool = None
 
     def __iter__(self):
         return self
@@ -599,8 +609,51 @@ class Reader(object):
 
         return record
 
-    def fetch(self, chrom, start=None, end=None):
-        """ Fetches records from a tabix-indexed VCF file and returns an
+
+
+    def fetch_bed(self, bed_file = '../../chr13bed.bed'):
+	if not self.filename:
+	    raise Exception('Please provide a filename (or a "normal" fsock)')
+	if not self._bedtool:
+	    self._bedtool = pybedtools.BedTool(self.filename)
+	bed = pybedtools.BedTool(bed_file).merge()
+	features = self._bedtool.intersect(bed)
+	return features
+
+    def fetch_multilocal(self, chrom = '13', local_list = [], local_file = 'feature_local.bed'):
+	if not self.filename:
+	    raise Exception('Please provide a filename (or a "normal" fsock)')
+
+	if not self._bedtool:
+	    self._bedtool = pybedtools.BedTool(self.filename)
+	g = open(local_file,"w+")
+	for l in local_list:
+		description = chrom + " " + str(l[0]) + " " + str(l[1])
+		feature = pybedtools.BedTool(description, from_string=True) #uwaga a co jesli beda podawane lokalizacje w zlej kolejnosci?
+		g.write(str(feature))
+	g.seek(0)
+	bed = pybedtools.BedTool(local_file).merge()
+	intervals = self._bedtool.intersect(bed)
+	return intervals
+	#fetch_bed(self, local_file)
+
+	
+    def fetch(self, chrom = '13', interval=[]):
+	if not self.filename:
+	    raise Exception('Please provide a filename (or a "normal" fsock)')
+
+	if not self._bedtool:
+	    self._bedtool = pybedtools.BedTool(self.filename)
+	description = chrom + " " + str(interval[0]) + " " + str(interval[1])
+	feature = pybedtools.BedTool(description, from_string=True)
+	result = self._bedtool.intersect(feature)
+	return result
+
+
+    
+	# napisac do fetcha ladny opis
+    def fetch_gff(self, gff_file='../../HS.gff3', chrom = '13',feature_type='pseudogene', location=[1,120000000000000],gff2bedfile='gff_2_bed.bed'):
+        """ Fetches records from a tabix-indexed VCF file and returns an 
             iterable of ``_Record`` instances
 
             chrom must be specified.
@@ -627,20 +680,39 @@ class Reader(object):
             requires pysam
 
         """
-        if not pysam:
-            raise Exception('pysam not available, try "pip install pysam"?')
-        if not self.filename:
-            raise Exception('Please provide a filename (or a "normal" fsock)')
 
-        if not self._tabix:
-            self._tabix = pysam.Tabixfile(self.filename,
-                                          encoding=self.encoding)
 
-        if self._prepend_chr and chrom[:3] == 'chr':
-            chrom = chrom[3:]
 
-        self.reader = self._tabix.fetch(chrom, start, end)
-        return self
+
+	if not self.filename:
+	    raise Exception('Please provide a filename (or a "normal" fsock)')
+
+	if not self._bedtool:
+	    self._bedtool = pybedtools.BedTool(self.filename)#, encoding=self.encoding)
+
+	if self._prepend_chr and chrom[:3] == 'chr':
+	    chrom = chrom[3:]
+	genes = pybedtools.BedTool(gff_file).remove_invalid().saveas()
+	filter_feature = genes.filter(lf_filter, location, feature_type)
+	#print filter_feature
+	g = open(gff2bedfile,'w+')
+	for feature in filter_feature:
+		#print feature
+		feature_bed = f.gff2bed(feature)
+		#print feature_bed
+		g.write(str(feature_bed))
+	g.seek(0)
+	#fetch_bed(self, feature_bed) #wywalimy to jesli karolina napisze funkcje dla vcf i bed
+	
+	bed_file = pybedtools.BedTool(gff2bedfile).merge() 
+	bed = bed_file.merge()
+	features = self._bedtool.intersect(bed_file)
+	return features #jest problem, musi byc dobry plik vcf, ze zgodnym chr
+
+	#self.reader = self._bedtool.fetch(chrom, start, end)#tu cyba bedzie intersect? 
+	#return self
+
+
 
 
 class Writer(object):
